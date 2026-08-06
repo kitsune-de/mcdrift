@@ -1,5 +1,9 @@
 # mcdrift
 
+[![CI](https://github.com/kitsune-de/mcdrift/actions/workflows/ci.yml/badge.svg)](https://github.com/kitsune-de/mcdrift/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/kitsune-de/mcdrift)](https://github.com/kitsune-de/mcdrift/releases)
+[![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+
 Finds Minecraft plugin code that breaks on newer server versions — by reading the
 compiled `.jar`. No source, no server, no plugin install.
 
@@ -233,3 +237,19 @@ Run the tests with `./gradlew build`.
 ## Licence
 
 MIT.
+
+## Releasing
+
+Tag and push; the release workflow builds and publishes `mcdrift.jar`:
+
+```bash
+git tag -a v1.2.3 -m "mcdrift 1.2.3" && git push origin v1.2.3
+```
+
+The tag must match `version` in `build.gradle.kts`, which the workflow checks before
+publishing. If the tag push does not start a run — some accounts have push-triggered
+workflows disabled — start it from the Actions tab, or publish manually:
+
+```bash
+./gradlew build && gh release create v1.2.3 build/libs/mcdrift.jar src/main/resources/ruleset.json
+```
