@@ -1,0 +1,78 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Build and test
+        run: ./gradlew build
+
+      - name: Upload test report on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-report
+          path: build/reports/tests/test
+
+      - name: Smoke test the CLI
+        run: |
+          set -euo pipefail
+          java -jar build/libs/mcdrift.jar --version
+          java -jar build/libs/mcdrift.jar --list-rules
+
+          # Every output format must produce something and not crash. --fail-on never
+          # keeps the exit code about the run itself rather than about the findings.
+          #
+          # Note the subject: mcdrift's own jar is NOT clean, because the rule classes
+          # contain the very literals they search for ("world_nether" and friends).
+          # Asserting "no findings" here would be asserting the wrong thing.
+          for fmt in text summary json sarif github; do
+            java -jar build/libs/mcdrift.jar build/libs/mcdrift.jar \
+              --format "$fmt" --fail-on never > "/tmp/out.$fmt"
+            test -s "/tmp/out.$fmt" || { echo "empty output for $fmt" >&2; exit 1; }
+          done
+
+          python3 -c "import json;json.load(open('/tmp/out.sarif'))"
+          echo "smoke test passed"
+
+      - name: Verify exit codes
+        run: |
+          set -uo pipefail
+          java -jar build/libs/mcdrift.jar build/libs/mcdrift.jar --fail-on never >/dev/null 2>&1
+          [ $? -eq 0 ] || { echo "--fail-on never should exit 0" >&2; exit 1; }
+
+          java -jar build/libs/mcdrift.jar no-such-file.jar >/dev/null 2>&1
+          [ $? -eq 2 ] || { echo "a bad path should exit 2" >&2; exit 1; }
+
+          java -jar build/libs/mcdrift.jar build/libs/mcdrift.jar --target 7.3 >/dev/null 2>&1
+          [ $? -eq 2 ] || { echo "a bad --target should exit 2" >&2; exit 1; }
+          echo "exit codes OK"
+
+      - name: Check the ruleset is well-formed
+        run: |
+          python3 - <<'PY'
+          import json, sys
+          with open("src/main/resources/ruleset.json", encoding="utf-8") as f:
+              doc = json.load(f)
+          assert doc["schema"] == 1, "unexpected schema version"
+          entries = doc["entries"]
+          assert len(entries) > 100, f"ruleset looks truncated: {len(entries)} entries"
+          for e in entries:
+              assert e["owner"] and e["name"], f"incomplete entry: {e}"
+              assert e["severity"] in ("ERROR", "WARN", "INFO"), f"bad severity: {e}"
+          print(f"ruleset OK: {len(entries)} entries")
+          PY

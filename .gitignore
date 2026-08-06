@@ -1,0 +1,8 @@
+build/
+.gradle/
+.cache/
+*.class
+.idea/
+*.iml
+.DS_Store
+mcdrift.sarif

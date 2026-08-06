@@ -1,0 +1,7 @@
+# mcdrift suppressions
+# See https://github.com/mcdrift/mcdrift#suppressing-findings
+#
+# Lines are one of:
+#   deprecated-api                     a rule, everywhere
+#   com.example.legacy.*               a class or package, all rules
+#   deprecated-api:com.example.Old     one rule in one place

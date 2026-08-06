@@ -1,0 +1,138 @@
+name: 'mcdrift'
+description: 'Find Minecraft plugin code that breaks on newer server versions'
+author: 'mcdrift'
+
+branding:
+  icon: 'alert-triangle'
+  color: 'orange'
+
+inputs:
+  path:
+    description: 'Jar file or directory to scan. Supports globs via the shell.'
+    required: false
+    default: 'build/libs'
+  target:
+    description: 'Minecraft version to check against.'
+    required: false
+    default: '26.1'
+  fail-on:
+    description: 'Exit non-zero at this severity or worse: error, warn or never.'
+    required: false
+    default: 'error'
+  min-severity:
+    description: 'Hide findings below this severity: error, warn or info.'
+    required: false
+    default: 'warn'
+  ignore-file:
+    description: 'Suppression list. Defaults to .mcdriftignore when present.'
+    required: false
+    default: ''
+  disable:
+    description: 'Comma-separated rule ids to skip.'
+    required: false
+    default: ''
+  ruleset:
+    description: 'Custom deprecation ruleset JSON.'
+    required: false
+    default: ''
+  upload-sarif:
+    description: 'Also write mcdrift.sarif for github/codeql-action/upload-sarif.'
+    required: false
+    default: 'false'
+  version:
+    description: 'mcdrift release to use. "latest" resolves the newest release.'
+    required: false
+    default: 'latest'
+
+outputs:
+  errors:
+    description: 'Number of ERROR findings.'
+    value: ${{ steps.scan.outputs.errors }}
+  warnings:
+    description: 'Number of WARN findings.'
+    value: ${{ steps.scan.outputs.warnings }}
+  sarif-file:
+    description: 'Path to the SARIF report, when upload-sarif is true.'
+    value: ${{ steps.scan.outputs.sarif-file }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Set up Java
+      uses: actions/setup-java@v4
+      with:
+        distribution: 'temurin'
+        java-version: '21'
+
+    - name: Download mcdrift
+      shell: bash
+      env:
+        MCDRIFT_VERSION: ${{ inputs.version }}
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        set -euo pipefail
+        if [ "$MCDRIFT_VERSION" = "latest" ]; then
+          url=$(gh release view --repo kitsune-de/mcdrift \
+            --json assets --jq '.assets[] | select(.name=="mcdrift.jar") | .url')
+        else
+          url="https://github.com/kitsune-de/mcdrift/releases/download/${MCDRIFT_VERSION}/mcdrift.jar"
+        fi
+        curl -fsSL -o "${RUNNER_TEMP}/mcdrift.jar" "$url"
+
+    - name: Run mcdrift
+      id: scan
+      shell: bash
+      env:
+        IN_PATH: ${{ inputs.path }}
+        IN_TARGET: ${{ inputs.target }}
+        IN_FAIL_ON: ${{ inputs.fail-on }}
+        IN_MIN_SEVERITY: ${{ inputs.min-severity }}
+        IN_IGNORE_FILE: ${{ inputs.ignore-file }}
+        IN_DISABLE: ${{ inputs.disable }}
+        IN_RULESET: ${{ inputs.ruleset }}
+        IN_UPLOAD_SARIF: ${{ inputs.upload-sarif }}
+      run: |
+        set -uo pipefail
+
+        args=("$IN_PATH" --target "$IN_TARGET" --min-severity "$IN_MIN_SEVERITY")
+        [ -n "$IN_IGNORE_FILE" ] && args+=(--ignore-file "$IN_IGNORE_FILE")
+        [ -n "$IN_DISABLE" ] && args+=(--disable "$IN_DISABLE")
+        [ -n "$IN_RULESET" ] && args+=(--ruleset "$IN_RULESET")
+
+        # Annotations are emitted with --fail-on never so the run always reaches the
+        # JSON pass below; the real exit code is decided from the counts afterwards.
+        java -jar "${RUNNER_TEMP}/mcdrift.jar" "${args[@]}" \
+          --format github --fail-on never
+
+        # --stats prints aggregate key=value counts, so the totals do not have to be
+        # scraped back out of the JSON report.
+        java -jar "${RUNNER_TEMP}/mcdrift.jar" "${args[@]}" \
+          --stats --fail-on never > "${RUNNER_TEMP}/mcdrift.stats"
+        cat "${RUNNER_TEMP}/mcdrift.stats" >> "$GITHUB_OUTPUT"
+
+        errors=$(grep '^errors=' "${RUNNER_TEMP}/mcdrift.stats" | cut -d= -f2)
+        warnings=$(grep '^warnings=' "${RUNNER_TEMP}/mcdrift.stats" | cut -d= -f2)
+
+        {
+          echo "## mcdrift"
+          echo ""
+          echo "Checked \`$IN_PATH\` against Minecraft **$IN_TARGET**."
+          echo ""
+          echo "| | count |"
+          echo "|---|---|"
+          echo "| Errors | $errors |"
+          echo "| Warnings | $warnings |"
+        } >> "$GITHUB_STEP_SUMMARY"
+
+        if [ "$IN_UPLOAD_SARIF" = "true" ]; then
+          java -jar "${RUNNER_TEMP}/mcdrift.jar" "${args[@]}" \
+            --format sarif --fail-on never > mcdrift.sarif
+          echo "sarif-file=mcdrift.sarif" >> "$GITHUB_OUTPUT"
+        fi
+
+        case "$IN_FAIL_ON" in
+          error) [ "$errors" -gt 0 ] && exit 1 ;;
+          warn)  [ $((errors + warnings)) -gt 0 ] && exit 1 ;;
+          never) ;;
+        esac
+        exit 0
