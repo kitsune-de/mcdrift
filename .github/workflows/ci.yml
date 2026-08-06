@@ -10,9 +10,9 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '21'
@@ -24,7 +24,7 @@ jobs:
 
       - name: Upload test report on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: test-report
           path: build/reports/tests/test
@@ -51,17 +51,37 @@ jobs:
           echo "smoke test passed"
 
       - name: Verify exit codes
+        shell: bash
         run: |
-          set -uo pipefail
-          java -jar build/libs/mcdrift.jar build/libs/mcdrift.jar --fail-on never >/dev/null 2>&1
-          [ $? -eq 0 ] || { echo "--fail-on never should exit 0" >&2; exit 1; }
+          # The runner's default shell is `bash -e`, which aborts on the first non-zero
+          # command — so a bare invocation followed by `[ $? -eq N ]` never reaches the
+          # check. Capturing the status inside the assignment keeps -e out of the way.
+          set +e
 
-          java -jar build/libs/mcdrift.jar no-such-file.jar >/dev/null 2>&1
-          [ $? -eq 2 ] || { echo "a bad path should exit 2" >&2; exit 1; }
+          check() {
+            local expected="$1" description="$2"; shift 2
+            "$@" >/dev/null 2>&1
+            local actual=$?
+            if [ "$actual" -ne "$expected" ]; then
+              echo "FAIL: $description — expected exit $expected, got $actual" >&2
+              return 1
+            fi
+            echo "ok: $description (exit $actual)"
+          }
 
-          java -jar build/libs/mcdrift.jar build/libs/mcdrift.jar --target 7.3 >/dev/null 2>&1
-          [ $? -eq 2 ] || { echo "a bad --target should exit 2" >&2; exit 1; }
-          echo "exit codes OK"
+          failures=0
+          check 0 "--fail-on never" \
+            java -jar build/libs/mcdrift.jar build/libs/mcdrift.jar --fail-on never || failures=1
+          check 2 "a missing file" \
+            java -jar build/libs/mcdrift.jar no-such-file.jar || failures=1
+          check 2 "an unparseable --target" \
+            java -jar build/libs/mcdrift.jar build/libs/mcdrift.jar --target 7.3 || failures=1
+          check 2 "an unknown rule in --disable" \
+            java -jar build/libs/mcdrift.jar build/libs/mcdrift.jar --disable nope || failures=1
+          check 1 "findings with the default --fail-on" \
+            java -jar build/libs/mcdrift.jar build/libs/mcdrift.jar || failures=1
+
+          exit $failures
 
       - name: Check the ruleset is well-formed
         run: |
