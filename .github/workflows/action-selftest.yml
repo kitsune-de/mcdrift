@@ -1,0 +1,59 @@
+name: Action self-test
+
+# Runs the published action against this repository's own build output, so the
+# composite action is exercised the way a consumer would use it rather than only
+# being read for syntax.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'action.yml'
+      - '.github/workflows/action-selftest.yml'
+
+jobs:
+  selftest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Build a jar to scan
+        run: ./gradlew build
+
+      - name: Run the action
+        id: mcdrift
+        uses: ./
+        with:
+          path: build/libs/mcdrift.jar
+          target: '26.1'
+          # mcdrift's own jar contains the literals its rules search for, so it is
+          # not clean. The point here is that the action runs, not that it is quiet.
+          fail-on: 'never'
+          min-severity: 'error'
+          upload-sarif: 'true'
+          version: 'v1.0.0'
+
+      - name: Check the action produced outputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "errors=${{ steps.mcdrift.outputs.errors }}"
+          echo "warnings=${{ steps.mcdrift.outputs.warnings }}"
+          echo "sarif=${{ steps.mcdrift.outputs.sarif-file }}"
+
+          # An empty output means the action's stats parsing broke, which is exactly
+          # the kind of failure that only shows up when the action really runs.
+          test -n "${{ steps.mcdrift.outputs.errors }}" || {
+            echo "the action produced no 'errors' output" >&2; exit 1; }
+          test -f mcdrift.sarif || {
+            echo "upload-sarif did not write mcdrift.sarif" >&2; exit 1; }
+          python3 -c "import json;json.load(open('mcdrift.sarif'))"
+          echo "action self-test passed"
